@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "fs/promises";
 
 import openapi from "../openapi.json" assert { type: 'json' };
+import { Console } from "console";
 
 const targetDirectory = "src/lib/spotify/model";
 
@@ -27,25 +28,73 @@ function generateType(typeName, typeSchema) {
 }
 
 function getGeneratedCode(typeName, typeSchema) {
-  const generatedType = getGeneratedType(typeSchema);
+  const [generatedType, generatedImports] = generatedTypeAndImports(typeSchema, []);
 
-  return `export type ${typeName} = ${generatedType};`;
+  let generatedCode = "";
+  if (Array.isArray(generatedImports)) {
+    generatedImports.forEach((element) => {
+      if (element) {
+        generatedCode += `import { ${element} } from "./${element}";\n`;
+      }
+    });
+  }
+
+  generatedCode += `\nexport type ${typeName} = ${generatedType};`;
+  return generatedCode;
 }
 
-function getGeneratedType(typeSchema) {
+function generatedTypeAndImports(typeSchema, imports) {
+  if ("$ref" in typeSchema) {
+    const ref = typeSchema["$ref"].split("/").pop();
+    imports.push(ref);
+    return [ref, imports];
+  }
+
+  if ("oneOf" in typeSchema) {
+    let properties = [];
+    let allImports = [...imports]; 
+    Object.keys(typeSchema.oneOf).forEach( (element) => {
+      const [propType, propImports] = generatedTypeAndImports(typeSchema.oneOf[element], allImports);
+      allImports = [...new Set([...allImports, ...propImports])];
+      properties.push(propType);
+    });
+    const types = "(" + properties.join(" | ") + ")"
+    return [types, allImports];
+  }
+
   const schemaType = typeSchema.type;
 
-  // TO DO: Generate typescript code from schema
   switch (schemaType) {
     case "number":
     case "integer":
+      return ["number", imports];
     case "string":
+      return ["string", imports];
     case "boolean":
+      return ["boolean", imports];
     case "array":
+      const [propType, propImports] = generatedTypeAndImports(typeSchema.items, imports)
+      return [propType + "[]", [...new Set([...imports, ...propImports])]];
     case "object":
+      if ("properties" in typeSchema) {
+        let allImports = [...imports]
+        const properties = Object.keys(typeSchema.properties)
+          .map(element => {
+            const [propType, propImports] = generatedTypeAndImports(typeSchema.properties[element], []);
+            allImports = [...new Set([...allImports, ...propImports])];
+            const isRequired =
+              "required" in typeSchema &&
+              typeSchema.required.includes(element);
+            return "\t" + element + (isRequired ? "" : "?") + ": " + propType;
+          })
+          .join(";\n");
+        return [`{\n${properties}\n}`, allImports];
+      }
+      else {return ["{}", imports];}
     default:
-      return "";
+      return ["any", imports];
   }
 }
+
 
 generateSpotifyClient();
